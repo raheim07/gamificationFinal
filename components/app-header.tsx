@@ -19,7 +19,9 @@ export function AppHeader({ user, onLogout }: AppHeaderProps) {
   }
 
   const roleLabel = user.role === "participant"
-    ? `Study Code: ${user.studyCode} | Support Code: ${user.supportCode}`
+    ? user.group === "control"
+      ? `Study Code: ${user.studyCode}`
+      : `Study Code: ${user.studyCode} | Support Code: ${user.supportCode}`
     : user.role === "support"
     ? "Support Member"
     : "Administrator"
@@ -83,3 +85,4 @@ export function AppHeader({ user, onLogout }: AppHeaderProps) {
     </motion.header>
   )
 }
+
