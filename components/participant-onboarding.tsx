@@ -53,6 +53,7 @@ const handleSubmit = async () => {
   }
 
   const user: User = {
+    id: result.id ? String(result.id) : undefined,
     alias: result.alias,
     role: "participant",
     group: result.group_type,

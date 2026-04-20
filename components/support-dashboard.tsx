@@ -1,10 +1,12 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   User, getUsers, getWeeklySteps, getWeeklyTotal,
   getStreak, getPoints, sendMessage, getLevel,
+  getUsersAsync, getWeeklyStepsAsync, getWeeklyTotalAsync,
+  getStreakAsync, getPointsAsync, sendMessageAsync,
 } from "@/lib/store"
 import { StepChart } from "@/components/step-chart"
 import { Users, Send, Flame, Star, Target, BarChart3, CheckCircle } from "lucide-react"
@@ -23,24 +25,81 @@ interface SupportDashboardProps {
 }
 
 export function SupportDashboard({ user }: SupportDashboardProps) {
-  const participants = getUsers().filter((u) => u.group === "intervention")
+  const [participants, setParticipants] = useState(() => getUsers().filter((u) => u.group === "intervention"))
   const [selectedAlias, setSelectedAlias] = useState<string>(participants[0]?.alias || "")
   const [message, setMessage] = useState("")
   const [sent, setSent] = useState(false)
+  const [isSending, setIsSending] = useState(false)
 
   const selected = participants.find((p) => p.alias === selectedAlias)
-  const weeklyData = selectedAlias ? getWeeklySteps(selectedAlias) : []
-  const weeklyTotal = selectedAlias ? getWeeklyTotal(selectedAlias) : 0
-  const streak = selectedAlias ? getStreak(selectedAlias) : 0
-  const points = selectedAlias ? getPoints(selectedAlias) : 0
+  const [weeklyData, setWeeklyData] = useState(selectedAlias ? getWeeklySteps(selectedAlias) : [])
+  const [weeklyTotal, setWeeklyTotal] = useState(selectedAlias ? getWeeklyTotal(selectedAlias) : 0)
+  const [streak, setStreak] = useState(selectedAlias ? getStreak(selectedAlias) : 0)
+  const [points, setPoints] = useState(selectedAlias ? getPoints(selectedAlias) : 0)
   const level = getLevel(points)
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  useEffect(() => {
+    let isActive = true
+
+    async function loadParticipants() {
+      const users = await getUsersAsync()
+      if (!isActive) return
+
+      const interventionParticipants = users.filter((u) => u.role === "participant" && u.group === "intervention")
+      setParticipants(interventionParticipants)
+      if (!selectedAlias && interventionParticipants[0]) {
+        setSelectedAlias(interventionParticipants[0].alias)
+      }
+    }
+
+    loadParticipants()
+
+    return () => {
+      isActive = false
+    }
+  }, [selectedAlias])
+
+  useEffect(() => {
+    let isActive = true
+
+    async function loadParticipantStats() {
+      if (!selectedAlias) {
+        setWeeklyData([])
+        setWeeklyTotal(0)
+        setStreak(0)
+        setPoints(0)
+        return
+      }
+
+      const [nextWeeklyData, nextWeeklyTotal, nextStreak, nextPoints] = await Promise.all([
+        getWeeklyStepsAsync(selectedAlias),
+        getWeeklyTotalAsync(selectedAlias),
+        getStreakAsync(selectedAlias),
+        getPointsAsync(selectedAlias),
+      ])
+
+      if (!isActive) return
+      setWeeklyData(nextWeeklyData)
+      setWeeklyTotal(nextWeeklyTotal)
+      setStreak(nextStreak)
+      setPoints(nextPoints)
+    }
+
+    loadParticipantStats()
+
+    return () => {
+      isActive = false
+    }
+  }, [selectedAlias])
+
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!message.trim() || !selectedAlias) return
-    sendMessage(user.alias, selectedAlias, message.trim())
+    setIsSending(true)
+    await sendMessageAsync(user.alias, selectedAlias, message.trim())
     setMessage("")
     setSent(true)
+    setIsSending(false)
     setTimeout(() => setSent(false), 2500)
   }
 
@@ -178,6 +237,7 @@ export function SupportDashboard({ user }: SupportDashboardProps) {
                 />
                 <motion.button
                   type="submit"
+                  disabled={isSending}
                   whileTap={{ scale: 0.97 }}
                   className="rounded-xl px-5 py-2.5 text-sm font-semibold transition-all duration-300 flex items-center gap-1.5"
                   style={{
@@ -186,7 +246,7 @@ export function SupportDashboard({ user }: SupportDashboardProps) {
                   }}
                 >
                   <Send className="h-4 w-4" />
-                  Send
+                  {isSending ? "Sending..." : "Send"}
                 </motion.button>
               </form>
               <AnimatePresence>

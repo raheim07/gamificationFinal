@@ -1,11 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useCallback, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   getUsers, getWeeklyTotal, getPoints, getStreak,
   getUnlockedBadges, getEngagementScore, exportCSV,
   updateUserGroup, Group, getAdherence,
+  getUsersAsync, getWeeklyTotalAsync, getPointsAsync,
+  getStreakAsync, getUnlockedBadgesAsync, getEngagementScoreAsync,
+  exportCSVAsync, updateUserGroupAsync, getAdherenceAsync,
 } from "@/lib/store"
 import { ShieldCheck, Download, BarChart3, Users, ArrowRightLeft, Eye } from "lucide-react"
 
@@ -21,13 +24,39 @@ const card = {
 export function AdminDashboard() {
   const [users, setUsers] = useState(getUsers())
   const [comparisonMode, setComparisonMode] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
 
   const participants = users.filter((u) => u.role === "participant")
   const controlUsers = participants.filter((u) => u.group === "control")
   const interventionUsers = participants.filter((u) => u.group === "intervention")
 
-  const handleExportCSV = () => {
-    const csv = exportCSV()
+  const refreshAdminData = useCallback(async () => {
+    const nextUsers = await getUsersAsync()
+    const participants = nextUsers.filter((u) => u.role === "participant")
+
+    await Promise.all(
+      participants.map((participant) =>
+        Promise.all([
+          getWeeklyTotalAsync(participant.alias),
+          getPointsAsync(participant.alias),
+          getStreakAsync(participant.alias),
+          getUnlockedBadgesAsync(participant.alias),
+          getEngagementScoreAsync(participant.alias),
+          getAdherenceAsync(participant.alias),
+        ])
+      )
+    )
+
+    setUsers(await getUsersAsync())
+  }, [])
+
+  useEffect(() => {
+    refreshAdminData()
+  }, [refreshAdminData])
+
+  const handleExportCSV = async () => {
+    setIsExporting(true)
+    const csv = await exportCSVAsync()
     const blob = new Blob([csv], { type: "text/csv" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -35,14 +64,15 @@ export function AdminDashboard() {
     a.download = "study_data.csv"
     a.click()
     URL.revokeObjectURL(url)
+    setIsExporting(false)
   }
 
-  const handleToggleGroup = (alias: string) => {
+  const handleToggleGroup = async (alias: string) => {
     const user = users.find((u) => u.alias === alias)
     if (!user || user.role !== "participant") return
     const newGroup: Group = user.group === "control" ? "intervention" : "control"
-    updateUserGroup(alias, newGroup)
-    setUsers(getUsers())
+    await updateUserGroupAsync(alias, newGroup)
+    await refreshAdminData()
   }
 
   const getGroupStats = (group: "control" | "intervention") => {
@@ -92,6 +122,7 @@ export function AdminDashboard() {
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={handleExportCSV}
+            disabled={isExporting}
             className="rounded-xl px-4 py-2 text-xs font-medium transition-all duration-300 flex items-center gap-1.5"
             style={{
               background: "linear-gradient(135deg, #0EA5A4, #06B6D4)",
@@ -99,7 +130,7 @@ export function AdminDashboard() {
             }}
           >
             <Download className="h-3.5 w-3.5" />
-            Export CSV
+            {isExporting ? "Exporting..." : "Export CSV"}
           </motion.button>
         </div>
       </motion.div>
@@ -265,7 +296,7 @@ export function AdminDashboard() {
             boxShadow: "0 4px 20px -4px rgba(14,165,164,0.3)",
           }}
         >
-          Export Study Data
+          {isExporting ? "Exporting..." : "Export Study Data"}
         </motion.button>
       </motion.div>
     </div>

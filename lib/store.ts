@@ -1,8 +1,11 @@
+import { getSupabaseClient, isSupabaseConfigured } from "@/src/lib/supabaseClient"
+
 // Types
 export type Role = "participant" | "support" | "admin"
 export type Group = "control" | "intervention"
 
 export interface User {
+  id?: string
   alias: string
   role: Role
   group?: Group
@@ -53,6 +56,61 @@ const STEPS_KEY = "gssi_steps"
 const MESSAGES_KEY = "gssi_messages"
 const BADGES_KEY = "gssi_badges"
 
+function saveSteps(alias: string, entries: StepEntry[]) {
+  if (typeof window === "undefined") return
+  localStorage.setItem(`${STEPS_KEY}_${alias}`, JSON.stringify(entries))
+}
+
+function normalizeDate(value: string) {
+  return new Date(value).toISOString().split("T")[0]
+}
+
+function mergeStepEntries(entries: StepEntry[]) {
+  const byDate = new Map<string, number>()
+  for (const entry of entries) {
+    byDate.set(entry.date, (byDate.get(entry.date) || 0) + entry.steps)
+  }
+  return [...byDate.entries()]
+    .map(([date, steps]) => ({ date, steps }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function normalizeParticipant(row: any): User {
+  return {
+    id: row.id ? String(row.id) : undefined,
+    alias: row.alias,
+    role: "participant",
+    group: row.group_type || row.group,
+    studyCode: row.study_code,
+    supportCode: row.support_code,
+    createdAt: row.created_at || new Date().toISOString(),
+  }
+}
+
+async function getParticipantId(alias: string) {
+  const localUser = getUsers().find((u) => u.alias === alias)
+  if (localUser?.id) return localUser.id
+  if (!isSupabaseConfigured()) return null
+
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase
+    .from("participants")
+    .select("id, alias, group_type, study_code, support_code, created_at")
+    .eq("alias", alias)
+    .maybeSingle()
+
+  if (error || !data?.id) return null
+
+  saveUser(normalizeParticipant(data))
+  return String(data.id)
+}
+
+function shouldUseLocalFallback(error: any) {
+  if (!error) return false
+  const code = error.code || ""
+  return code === "42P01" || code === "42703" || error.message?.includes("not configured")
+}
+
 // User management
 export function getUsers(): User[] {
   if (typeof window === "undefined") return []
@@ -69,6 +127,31 @@ export function saveUser(user: User) {
     users.push(user)
   }
   localStorage.setItem(USERS_KEY, JSON.stringify(users))
+}
+
+export async function getUsersAsync(): Promise<User[]> {
+  const localUsers = getUsers()
+  if (!isSupabaseConfigured()) return localUsers
+
+  try {
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase
+      .from("participants")
+      .select("id, alias, group_type, study_code, support_code, created_at")
+      .order("created_at", { ascending: true })
+
+    if (error || !data) return localUsers
+
+    const remoteParticipants = data.map(normalizeParticipant)
+    for (const participant of remoteParticipants) {
+      saveUser(participant)
+    }
+
+    const localNonParticipants = localUsers.filter((user) => user.role !== "participant")
+    return [...localNonParticipants, ...remoteParticipants]
+  } catch {
+    return localUsers
+  }
 }
 
 export function getCurrentUser(): User | null {
@@ -127,6 +210,85 @@ export function getWeeklyTotal(alias: string): number {
   return getWeeklySteps(alias).reduce((sum, e) => sum + e.steps, 0)
 }
 
+export async function getStepsAsync(alias: string): Promise<StepEntry[]> {
+  const localSteps = getSteps(alias)
+  if (!isSupabaseConfigured()) return localSteps
+
+  try {
+    const participantId = await getParticipantId(alias)
+    if (!participantId) return localSteps
+
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .select("steps, date")
+      .eq("participant_id", participantId)
+      .order("date", { ascending: true })
+
+    if (error || !data) return localSteps
+
+    const remoteSteps = mergeStepEntries(
+      data.map((entry: any) => ({
+        date: normalizeDate(entry.date),
+        steps: Number(entry.steps) || 0,
+      }))
+    )
+    saveSteps(alias, remoteSteps)
+    return remoteSteps
+  } catch {
+    return localSteps
+  }
+}
+
+export async function addStepsAsync(alias: string, steps: number): Promise<StepEntry[]> {
+  addSteps(alias, steps)
+  if (!isSupabaseConfigured()) return getSteps(alias)
+
+  try {
+    const participantId = await getParticipantId(alias)
+    if (!participantId) return getSteps(alias)
+
+    const supabase = getSupabaseClient()
+    const today = new Date().toISOString().split("T")[0]
+    const { data: existing, error: existingError } = await supabase
+      .from("activity_logs")
+      .select("id, steps")
+      .eq("participant_id", participantId)
+      .eq("date", today)
+      .maybeSingle()
+
+    if (shouldUseLocalFallback(existingError)) return getSteps(alias)
+
+    if (existing?.id) {
+      const { error } = await supabase
+        .from("activity_logs")
+        .update({ steps: (Number(existing.steps) || 0) + steps })
+        .eq("id", existing.id)
+
+      if (error) return getSteps(alias)
+    } else {
+      const { error } = await supabase
+        .from("activity_logs")
+        .insert([{ participant_id: participantId, steps, date: today }])
+
+      if (error) return getSteps(alias)
+    }
+
+    return getStepsAsync(alias)
+  } catch {
+    return getSteps(alias)
+  }
+}
+
+export async function getWeeklyStepsAsync(alias: string): Promise<StepEntry[]> {
+  await getStepsAsync(alias)
+  return getWeeklySteps(alias)
+}
+
+export async function getWeeklyTotalAsync(alias: string): Promise<number> {
+  return (await getWeeklyStepsAsync(alias)).reduce((sum, e) => sum + e.steps, 0)
+}
+
 // Gamification
 export function getPoints(alias: string): number {
   const allSteps = getSteps(alias)
@@ -160,6 +322,21 @@ export function getLevel(points: number): { name: string; min: number; max: numb
   if (points >= 1500) return { name: "Champion", min: 1500, max: 3000 }
   if (points >= 500) return { name: "Active", min: 500, max: 1500 }
   return { name: "Beginner", min: 0, max: 500 }
+}
+
+export async function getPointsAsync(alias: string): Promise<number> {
+  await getStepsAsync(alias)
+  return getPoints(alias)
+}
+
+export async function getStreakAsync(alias: string): Promise<number> {
+  await getStepsAsync(alias)
+  return getStreak(alias)
+}
+
+export async function getAdherenceAsync(alias: string): Promise<number> {
+  await getStepsAsync(alias)
+  return getAdherence(alias)
 }
 
 export function getAdherence(alias: string): number {
@@ -209,6 +386,70 @@ export function checkAndUnlockBadges(alias: string): Badge[] {
   return newBadges
 }
 
+export async function getUnlockedBadgesAsync(alias: string): Promise<Badge[]> {
+  const localBadges = getUnlockedBadges(alias)
+  if (!isSupabaseConfigured()) return localBadges
+
+  try {
+    const participantId = await getParticipantId(alias)
+    if (!participantId) return localBadges
+
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase
+      .from("participant_badges")
+      .select("badge_id, name, description, icon, unlocked_at")
+      .eq("participant_id", participantId)
+      .order("unlocked_at", { ascending: true })
+
+    if (error || !data) return localBadges
+
+    const remoteBadges = data.map((badge: any) => ({
+      id: badge.badge_id,
+      name: badge.name,
+      description: badge.description,
+      icon: badge.icon,
+      unlockedAt: badge.unlocked_at,
+    }))
+
+    localStorage.setItem(`${BADGES_KEY}_${alias}`, JSON.stringify(remoteBadges))
+    return remoteBadges
+  } catch {
+    return localBadges
+  }
+}
+
+export async function checkAndUnlockBadgesAsync(alias: string): Promise<Badge[]> {
+  const newBadges = checkAndUnlockBadges(alias)
+  if (!isSupabaseConfigured() || newBadges.length === 0) return newBadges
+
+  try {
+    const participantId = await getParticipantId(alias)
+    if (!participantId) return newBadges
+
+    const supabase = getSupabaseClient()
+    const rows = newBadges.map((badge) => ({
+      participant_id: participantId,
+      badge_id: badge.id,
+      name: badge.name,
+      description: badge.description,
+      icon: badge.icon,
+      unlocked_at: badge.unlockedAt,
+    }))
+
+    const { error } = await supabase
+      .from("participant_badges")
+      .upsert(rows, { onConflict: "participant_id,badge_id" })
+
+    if (error && !shouldUseLocalFallback(error)) {
+      console.error("Badge sync failed:", error)
+    }
+  } catch {
+    return newBadges
+  }
+
+  return newBadges
+}
+
 // Messages
 export function getMessages(alias: string): Message[] {
   if (typeof window === "undefined") return []
@@ -236,6 +477,54 @@ export function sendMessage(from: string, to: string, text: string) {
     timestamp: new Date().toISOString(),
   })
   localStorage.setItem(MESSAGES_KEY, JSON.stringify(all))
+}
+
+export async function getMessagesForAsync(alias: string): Promise<Message[]> {
+  const localMessages = getMessagesFor(alias)
+  if (!isSupabaseConfigured()) return localMessages
+
+  try {
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase
+      .from("support_messages")
+      .select("id, from_alias, to_alias, text, created_at")
+      .eq("to_alias", alias)
+      .order("created_at", { ascending: false })
+
+    if (error || !data) return localMessages
+
+    const remoteMessages = data.map((message: any) => ({
+      id: String(message.id),
+      from: message.from_alias,
+      to: message.to_alias,
+      text: message.text,
+      timestamp: message.created_at,
+    }))
+
+    const allLocal = getMessages(alias).filter((message) => message.to !== alias)
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify([...allLocal, ...remoteMessages]))
+    return remoteMessages
+  } catch {
+    return localMessages
+  }
+}
+
+export async function sendMessageAsync(from: string, to: string, text: string) {
+  sendMessage(from, to, text)
+  if (!isSupabaseConfigured()) return
+
+  try {
+    const supabase = getSupabaseClient()
+    const { error } = await supabase
+      .from("support_messages")
+      .insert([{ from_alias: from, to_alias: to, text }])
+
+    if (error && !shouldUseLocalFallback(error)) {
+      console.error("Support message sync failed:", error)
+    }
+  } catch {
+    return
+  }
 }
 
 // Engagement score
@@ -270,11 +559,57 @@ export function exportCSV(): string {
   return rows.join("\n")
 }
 
+export async function exportCSVAsync(): Promise<string> {
+  const users = await getUsersAsync()
+  const rows = ["alias,group,weeklySteps,points,streak,badgeCount,engagementScore"]
+
+  for (const user of users) {
+    if (user.role !== "participant") continue
+    const [weekly, points, streak, badges, engagement] = await Promise.all([
+      getWeeklyTotalAsync(user.alias),
+      getPointsAsync(user.alias),
+      getStreakAsync(user.alias),
+      getUnlockedBadgesAsync(user.alias),
+      getEngagementScoreAsync(user.alias),
+    ])
+    rows.push(`${user.alias},${user.group || "none"},${weekly},${points},${streak},${badges.length},${engagement}`)
+  }
+
+  return rows.join("\n")
+}
+
+export async function getEngagementScoreAsync(alias: string): Promise<number> {
+  await Promise.all([getStepsAsync(alias), getUnlockedBadgesAsync(alias)])
+  return getEngagementScore(alias)
+}
+
 export function updateUserGroup(alias: string, group: Group) {
   const users = getUsers()
   const idx = users.findIndex((u) => u.alias === alias)
   if (idx >= 0) {
     users[idx].group = group
     localStorage.setItem(USERS_KEY, JSON.stringify(users))
+  }
+}
+
+export async function updateUserGroupAsync(alias: string, group: Group) {
+  updateUserGroup(alias, group)
+  if (!isSupabaseConfigured()) return
+
+  try {
+    const participantId = await getParticipantId(alias)
+    if (!participantId) return
+
+    const supabase = getSupabaseClient()
+    const { error } = await supabase
+      .from("participants")
+      .update({ group_type: group })
+      .eq("id", participantId)
+
+    if (error && !shouldUseLocalFallback(error)) {
+      console.error("Group sync failed:", error)
+    }
+  } catch {
+    return
   }
 }

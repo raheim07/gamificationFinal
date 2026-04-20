@@ -1,7 +1,18 @@
 "use client"
 
-import { useState } from "react"
-import { User, addSteps, getWeeklySteps, getWeeklyTotal, getAdherence, getSteps } from "@/lib/store"
+import { useEffect, useState } from "react"
+import {
+  User,
+  getWeeklySteps,
+  getWeeklyTotal,
+  getAdherence,
+  getSteps,
+  addStepsAsync,
+  getWeeklyStepsAsync,
+  getWeeklyTotalAsync,
+  getAdherenceAsync,
+  getStepsAsync,
+} from "@/lib/store"
 import { StepChart } from "@/components/step-chart"
 import { Footprints, BarChart3, TrendingUp } from "lucide-react"
 
@@ -14,26 +25,57 @@ export function ControlDashboard({ user }: ControlDashboardProps) {
   const [weeklyData, setWeeklyData] = useState(getWeeklySteps(user.alias))
   const [weeklyTotal, setWeeklyTotal] = useState(getWeeklyTotal(user.alias))
   const [adherence, setAdherence] = useState(getAdherence(user.alias))
+  const [isSaving, setIsSaving] = useState(false)
   const [todaySteps, setTodaySteps] = useState(() => {
     const today = new Date().toISOString().split("T")[0]
     const entry = getSteps(user.alias).find((e) => e.date === today)
     return entry?.steps || 0
   })
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    let isActive = true
+
+    async function refreshData() {
+      const [remoteWeeklyData, remoteWeeklyTotal, remoteAdherence, remoteSteps] = await Promise.all([
+        getWeeklyStepsAsync(user.alias),
+        getWeeklyTotalAsync(user.alias),
+        getAdherenceAsync(user.alias),
+        getStepsAsync(user.alias),
+      ])
+
+      if (!isActive) return
+
+      const today = new Date().toISOString().split("T")[0]
+      const entry = remoteSteps.find((e) => e.date === today)
+      setWeeklyData(remoteWeeklyData)
+      setWeeklyTotal(remoteWeeklyTotal)
+      setAdherence(remoteAdherence)
+      setTodaySteps(entry?.steps || 0)
+    }
+
+    refreshData()
+
+    return () => {
+      isActive = false
+    }
+  }, [user.alias])
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const steps = parseInt(stepInput)
     if (isNaN(steps) || steps <= 0) return
 
-    addSteps(user.alias, steps)
-    setWeeklyData(getWeeklySteps(user.alias))
-    setWeeklyTotal(getWeeklyTotal(user.alias))
-    setAdherence(getAdherence(user.alias))
+    setIsSaving(true)
+    await addStepsAsync(user.alias, steps)
+    setWeeklyData(await getWeeklyStepsAsync(user.alias))
+    setWeeklyTotal(await getWeeklyTotalAsync(user.alias))
+    setAdherence(await getAdherenceAsync(user.alias))
 
     const today = new Date().toISOString().split("T")[0]
-    const entry = getSteps(user.alias).find((e) => e.date === today)
+    const entry = (await getStepsAsync(user.alias)).find((e) => e.date === today)
     setTodaySteps(entry?.steps || 0)
     setStepInput("")
+    setIsSaving(false)
   }
 
   return (
@@ -72,10 +114,11 @@ export function ControlDashboard({ user }: ControlDashboardProps) {
           />
           <button
             type="submit"
+            disabled={isSaving}
             className="rounded-xl px-5 py-2.5 text-sm font-medium transition-opacity hover:opacity-90"
             style={{ background: "var(--surface-tag)", color: "var(--text-secondary)" }}
           >
-            Submit
+            {isSaving ? "Saving..." : "Submit"}
           </button>
         </form>
         {todaySteps > 0 && (

@@ -1,12 +1,16 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   User, Badge, addSteps, getWeeklySteps, getWeeklyTotal,
   getAdherence, getPoints, getStreak, getLevel,
   checkAndUnlockBadges, getUnlockedBadges, getSteps,
   getMessagesFor, getUsers, BADGES,
+  addStepsAsync, getWeeklyStepsAsync, getWeeklyTotalAsync,
+  getAdherenceAsync, getPointsAsync, getStreakAsync,
+  checkAndUnlockBadgesAsync, getUnlockedBadgesAsync, getStepsAsync,
+  getMessagesForAsync, getUsersAsync,
 } from "@/lib/store"
 import { StepChart } from "@/components/step-chart"
 import { ProgressRing } from "@/components/progress-ring"
@@ -90,10 +94,18 @@ export function InterventionDashboard({ user, introPlayed }: InterventionDashboa
   const [streak, setStreak] = useState(getStreak(user.alias))
   const [unlockedBadges, setUnlockedBadges] = useState(getUnlockedBadges(user.alias))
   const [newBadge, setNewBadge] = useState<Badge | null>(null)
-  const [messages] = useState(getMessagesFor(user.alias))
+  const [messages, setMessages] = useState(getMessagesFor(user.alias))
+  const [leaderboard, setLeaderboard] = useState(() => {
+    const allUsers = getUsers().filter((u) => u.role === "participant" && u.group === "intervention")
+    return allUsers
+      .map((u) => ({ alias: u.alias, points: getPoints(u.alias) }))
+      .sort((a, b) => b.points - a.points)
+      .slice(0, 5)
+  })
   const [showSparks, setShowSparks] = useState(false)
   const [pointsEarned, setPointsEarned] = useState<number | null>(null)
   const [submitPulse, setSubmitPulse] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const submitKey = useRef(0)
   const [todaySteps, setTodaySteps] = useState(() => {
     const today = new Date().toISOString().split("T")[0]
@@ -106,31 +118,73 @@ export function InterventionDashboard({ user, introPlayed }: InterventionDashboa
   const weeklyProgress = Math.round((weeklyTotal / weeklyGoal) * 100)
   const goalReached = weeklyTotal >= weeklyGoal
 
-  const refreshData = useCallback(() => {
-    setWeeklyData(getWeeklySteps(user.alias))
-    setWeeklyTotal(getWeeklyTotal(user.alias))
-    setAdherence(getAdherence(user.alias))
-    setPoints(getPoints(user.alias))
-    setStreak(getStreak(user.alias))
-    setUnlockedBadges(getUnlockedBadges(user.alias))
+  const refreshData = useCallback(async () => {
+    const [
+      nextWeeklyData,
+      nextWeeklyTotal,
+      nextAdherence,
+      nextPoints,
+      nextStreak,
+      nextBadges,
+      nextMessages,
+      nextSteps,
+      users,
+    ] = await Promise.all([
+      getWeeklyStepsAsync(user.alias),
+      getWeeklyTotalAsync(user.alias),
+      getAdherenceAsync(user.alias),
+      getPointsAsync(user.alias),
+      getStreakAsync(user.alias),
+      getUnlockedBadgesAsync(user.alias),
+      getMessagesForAsync(user.alias),
+      getStepsAsync(user.alias),
+      getUsersAsync(),
+    ])
+
+    setWeeklyData(nextWeeklyData)
+    setWeeklyTotal(nextWeeklyTotal)
+    setAdherence(nextAdherence)
+    setPoints(nextPoints)
+    setStreak(nextStreak)
+    setUnlockedBadges(nextBadges)
+    setMessages(nextMessages)
+
     const today = new Date().toISOString().split("T")[0]
-    const entry = getSteps(user.alias).find((e) => e.date === today)
+    const entry = nextSteps.find((e) => e.date === today)
     setTodaySteps(entry?.steps || 0)
+
+    const nextLeaderboard = await Promise.all(
+      users
+        .filter((u) => u.role === "participant" && u.group === "intervention")
+        .map(async (u) => ({ alias: u.alias, points: await getPointsAsync(u.alias) }))
+    )
+
+    setLeaderboard(
+      nextLeaderboard
+        .sort((a, b) => b.points - a.points)
+        .slice(0, 5)
+    )
   }, [user.alias])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    refreshData()
+  }, [refreshData])
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const steps = parseInt(stepInput)
     if (isNaN(steps) || steps <= 0) return
 
-    const oldPoints = getPoints(user.alias)
-    addSteps(user.alias, steps)
-    const newBadges = checkAndUnlockBadges(user.alias)
-    const newPoints = getPoints(user.alias)
+    setIsSaving(true)
+    const oldPoints = await getPointsAsync(user.alias)
+    await addStepsAsync(user.alias, steps)
+    const newBadges = await checkAndUnlockBadgesAsync(user.alias)
+    const newPoints = await getPointsAsync(user.alias)
     const earned = newPoints - oldPoints
 
-    refreshData()
+    await refreshData()
     setStepInput("")
+    setIsSaving(false)
 
     // Trigger micro interactions
     setSubmitPulse(true)
@@ -149,13 +203,6 @@ export function InterventionDashboard({ user, introPlayed }: InterventionDashboa
       setNewBadge(newBadges[0])
     }
   }
-
-  // Leaderboard
-  const allUsers = getUsers().filter((u) => u.role === "participant" && u.group === "intervention")
-  const leaderboard = allUsers
-    .map((u) => ({ alias: u.alias, points: getPoints(u.alias) }))
-    .sort((a, b) => b.points - a.points)
-    .slice(0, 5)
 
   // Motivational microcopy
   const microcopies = [
@@ -213,6 +260,7 @@ export function InterventionDashboard({ user, introPlayed }: InterventionDashboa
           />
           <motion.button
             type="submit"
+            disabled={isSaving}
             animate={submitPulse ? { scale: [1, 1.06, 1] } : {}}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="rounded-xl px-5 py-2.5 text-sm font-semibold transition-all duration-300 relative overflow-hidden"
@@ -222,7 +270,7 @@ export function InterventionDashboard({ user, introPlayed }: InterventionDashboa
               boxShadow: "0 2px 12px -2px rgba(14,165,164,0.3)",
             }}
           >
-            Log
+            {isSaving ? "Saving..." : "Log"}
             {showSparks && <Sparks key={submitKey.current} />}
           </motion.button>
         </form>

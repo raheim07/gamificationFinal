@@ -1,27 +1,9 @@
+import { addStepsAsync, getWeeklyStepsAsync } from "@/lib/store"
 
-
-
-
-async function logSteps(participantId, steps) {
-  await supabase.from("activity_logs").insert([
-    {
-      participant_id: participantId,
-      steps: steps,
-      date: new Date()
-    }
-  ])
+export async function logSteps(participantAlias, steps) {
+  return addStepsAsync(participantAlias, steps)
 }
 
-
-
-
-
-
-async function getWeeklySteps(participantId) {
-  const { data } = await supabase
-    .from("activity_logs")
-    .select("*")
-    .eq("participant_id", participantId)
-
-  return data
+export async function getWeeklySteps(participantAlias) {
+  return getWeeklyStepsAsync(participantAlias)
 }
