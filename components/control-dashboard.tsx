@@ -1,9 +1,15 @@
 "use client"
 
-import { useState } from "react"
-import { User, addSteps, getWeeklySteps, getWeeklyTotal, getAdherence, getSteps } from "@/lib/store"
+import { useState, useEffect, useCallback } from "react"
+import { User } from "@/lib/store"
 import { StepChart } from "@/components/step-chart"
 import { Footprints, BarChart3, TrendingUp } from "lucide-react"
+import {
+  saveDailySteps,
+  getWeeklyActivity,
+  getParticipantStats,
+  getTodaySteps,
+} from "@/src/services/activityService"
 
 interface ControlDashboardProps {
   user: User
@@ -11,29 +17,51 @@ interface ControlDashboardProps {
 
 export function ControlDashboard({ user }: ControlDashboardProps) {
   const [stepInput, setStepInput] = useState("")
-  const [weeklyData, setWeeklyData] = useState(getWeeklySteps(user.alias))
-  const [weeklyTotal, setWeeklyTotal] = useState(getWeeklyTotal(user.alias))
-  const [adherence, setAdherence] = useState(getAdherence(user.alias))
-  const [todaySteps, setTodaySteps] = useState(() => {
-    const today = new Date().toISOString().split("T")[0]
-    const entry = getSteps(user.alias).find((e) => e.date === today)
-    return entry?.steps || 0
-  })
+  const [weeklyData, setWeeklyData] = useState<{ date: string; steps: number }[]>([])
+  const [weeklyTotal, setWeeklyTotal] = useState(0)
+  const [adherence, setAdherence] = useState(0)
+  const [todaySteps, setTodaySteps] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const loadData = useCallback(async () => {
+    try {
+      const [weekly, stats, today] = await Promise.all([
+        getWeeklyActivity(user.alias),
+        getParticipantStats(user.alias),
+        getTodaySteps(user.alias),
+      ])
+
+      setWeeklyData(weekly)
+      setWeeklyTotal(stats.total_steps)
+      setAdherence(stats.adherence)
+      setTodaySteps(today)
+    } catch (err) {
+      console.error("Error loading control dashboard data:", err)
+    } finally {
+      setLoading(false)
+    }
+  }, [user.alias])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const steps = parseInt(stepInput)
     if (isNaN(steps) || steps <= 0) return
 
-    addSteps(user.alias, steps)
-    setWeeklyData(getWeeklySteps(user.alias))
-    setWeeklyTotal(getWeeklyTotal(user.alias))
-    setAdherence(getAdherence(user.alias))
-
-    const today = new Date().toISOString().split("T")[0]
-    const entry = getSteps(user.alias).find((e) => e.date === today)
-    setTodaySteps(entry?.steps || 0)
-    setStepInput("")
+    setSubmitting(true)
+    try {
+      await saveDailySteps(user.alias, steps)
+      setStepInput("")
+      await loadData()
+    } catch (err) {
+      console.error("Error submitting steps:", err)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -62,25 +90,28 @@ export function ControlDashboard({ user }: ControlDashboardProps) {
             onChange={(e) => setStepInput(e.target.value)}
             placeholder="Enter steps..."
             min="1"
-            className="flex-1 rounded-xl px-4 py-2.5 text-sm transition-all focus:outline-none focus:ring-2"
+            disabled={submitting}
+            className="flex-1 rounded-xl px-4 py-2.5 text-sm transition-all focus:outline-none focus:ring-2 disabled:opacity-50"
             style={{
               background: "var(--surface-input)",
               color: "var(--text-primary)",
             }}
-            onFocus={(e) => e.currentTarget.style.boxShadow = "0 0 0 2px var(--text-dim)"}
-            onBlur={(e) => e.currentTarget.style.boxShadow = "none"}
+            onFocus={(e) => (e.currentTarget.style.boxShadow = "0 0 0 2px var(--text-dim)")}
+            onBlur={(e) => (e.currentTarget.style.boxShadow = "none")}
           />
           <button
             type="submit"
-            className="rounded-xl px-5 py-2.5 text-sm font-medium transition-opacity hover:opacity-90"
+            disabled={submitting}
+            className="rounded-xl px-5 py-2.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ background: "var(--surface-tag)", color: "var(--text-secondary)" }}
           >
-            Submit
+            {submitting ? "Saving..." : "Submit"}
           </button>
         </form>
         {todaySteps > 0 && (
           <p className="text-xs mt-2" style={{ color: "var(--text-dim)" }}>
-            {"Today's total: "}{todaySteps.toLocaleString()} steps
+            {"Today's total: "}
+            {todaySteps.toLocaleString()} steps
           </p>
         )}
       </div>
@@ -92,8 +123,11 @@ export function ControlDashboard({ user }: ControlDashboardProps) {
             <BarChart3 className="h-4 w-4" />
             <span className="text-xs">Weekly Total</span>
           </div>
-          <p className="font-[var(--font-montserrat)] text-2xl font-light" style={{ color: "var(--text-primary)" }}>
-            {weeklyTotal.toLocaleString()}
+          <p
+            className="font-[var(--font-montserrat)] text-2xl font-light"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {loading ? "—" : weeklyTotal.toLocaleString()}
           </p>
         </div>
         <div className="glass-card rounded-2xl p-3 sm:p-4">
@@ -101,16 +135,30 @@ export function ControlDashboard({ user }: ControlDashboardProps) {
             <TrendingUp className="h-4 w-4" />
             <span className="text-xs">Adherence</span>
           </div>
-          <p className="font-[var(--font-montserrat)] text-2xl font-light" style={{ color: "var(--text-primary)" }}>
-            {adherence}%
+          <p
+            className="font-[var(--font-montserrat)] text-2xl font-light"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {loading ? "—" : `${adherence}%`}
           </p>
         </div>
       </div>
 
       {/* Chart - no animation, static */}
       <div className="glass-card rounded-2xl p-4 sm:p-5">
-        <h3 className="text-xs font-medium mb-3" style={{ color: "var(--text-secondary)" }}>Weekly Breakdown</h3>
-        <StepChart data={weeklyData} animate={false} />
+        <h3 className="text-xs font-medium mb-3" style={{ color: "var(--text-secondary)" }}>
+          Weekly Breakdown
+        </h3>
+        {loading ? (
+          <div
+            className="h-32 flex items-center justify-center text-xs"
+            style={{ color: "var(--text-dim)" }}
+          >
+            Loading...
+          </div>
+        ) : (
+          <StepChart data={weeklyData} animate={false} />
+        )}
       </div>
     </div>
   )

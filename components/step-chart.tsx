@@ -1,6 +1,9 @@
 "use client"
 
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from "recharts"
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, Cell,
+} from "recharts"
 import { StepEntry } from "@/lib/store"
 
 interface StepChartProps {
@@ -11,12 +14,23 @@ interface StepChartProps {
 const COLORS = ["#0EA5A4", "#06B6D4", "#38BDF8"]
 const GOAL = 5000
 
+// Parses "YYYY-MM-DD" as a LOCAL date (not UTC).
+// Using new Date("YYYY-MM-DD") treats it as UTC midnight which rolls
+// back one day in negative-offset timezones (US, etc.) — this fixes that.
+function parseDateLocal(dateStr: string): Date {
+  const [year, month, day] = dateStr.split("-").map(Number)
+  return new Date(year, month - 1, day)
+}
+
 export function StepChart({ data, animate = true }: StepChartProps) {
-  const today = new Date().toLocaleDateString("en", { weekday: "short" })
-  const maxSteps = Math.max(...data.map(d => d.steps), 0)
+  // Also get today using local date parts so the comparison is always correct
+  const now = new Date()
+  const today = now.toLocaleDateString("en", { weekday: "short" })
+
+  const maxSteps = Math.max(...data.map((d) => d.steps), 0)
 
   const chartData = data.map((entry, i) => {
-    const day = new Date(entry.date).toLocaleDateString("en", { weekday: "short" })
+    const day = parseDateLocal(entry.date).toLocaleDateString("en", { weekday: "short" })
     return {
       day,
       steps: entry.steps,
@@ -66,7 +80,7 @@ export function StepChart({ data, animate = true }: StepChartProps) {
             tickLine={false}
             ticks={[0, 2000, 4000, 6000, 8000, 10000, 12000]}
             domain={[0, (dataMax: number) => Math.max(12000, Math.ceil(dataMax / 2000) * 2000)]}
-            tickFormatter={(v) => v >= 1000 ? `${v / 1000}k` : v}
+            tickFormatter={(v) => (v >= 1000 ? `${v / 1000}k` : v)}
           />
           <ReferenceLine
             y={GOAL}
@@ -104,14 +118,10 @@ export function StepChart({ data, animate = true }: StepChartProps) {
             {chartData.map((entry, index) => {
               let fill = `url(#barGradient${entry.colorIndex})`
               let opacity = 1
-              
-              if (entry.reachedGoal) {
-                fill = "url(#barGradientSuccess)"
-              }
-              if (entry.steps < 2000 && entry.steps > 0) {
-                opacity = 0.55
-              }
-              
+
+              if (entry.reachedGoal) fill = "url(#barGradientSuccess)"
+              if (entry.steps < 2000 && entry.steps > 0) opacity = 0.55
+
               return (
                 <Cell
                   key={`cell-${index}`}
