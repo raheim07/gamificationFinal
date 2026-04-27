@@ -41,13 +41,13 @@ export function SupportDashboard({ user }: SupportDashboardProps) {
   const [sendError, setSendError] = useState("")
 
   // ── Load the one participant this support user is linked to ──────────────
-  // Flow: support_users (by alias) → participant_id → participants row →
-  //       activity via activityService
+  // Flow: get auth session → support_users (by user_id) → participant_id →
+  //       participants row → activity via activityService
   const loadParticipant = useCallback(async () => {
     setLoading(true)
     setLoadError("")
     try {
-      // 1. Find the support_user row for this user
+      // 1. Look up support_users by alias (no Supabase auth account exists for support users)
       const { data: supportRow, error: supportErr } = await supabase
         .from("support_users")
         .select("participant_id")
@@ -55,6 +55,7 @@ export function SupportDashboard({ user }: SupportDashboardProps) {
         .single()
 
       if (supportErr || !supportRow?.participant_id) {
+        console.error("support_users lookup error:", supportErr)
         setLoadError("Your account isn't linked to a participant yet. Contact the study administrator.")
         return
       }
@@ -67,6 +68,7 @@ export function SupportDashboard({ user }: SupportDashboardProps) {
         .single()
 
       if (partErr || !p) {
+        console.error("participants lookup error:", partErr)
         setLoadError("Could not load participant data. Please try again.")
         return
       }
@@ -96,7 +98,8 @@ export function SupportDashboard({ user }: SupportDashboardProps) {
     } finally {
       setLoading(false)
     }
-  }, [user.alias])
+  }, [])
+  // ↑ Removed user.alias dependency — we now rely on the auth session
 
   useEffect(() => {
     loadParticipant()
