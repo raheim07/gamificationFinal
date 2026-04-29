@@ -16,15 +16,12 @@ export const metadata: Metadata = {
   title: 'Gamified Social Support Intervention | CVR Study',
   description: 'A gamified social support intervention for cardiovascular risk reduction. Track steps, earn badges, and support each other toward better heart health.',
   icons: {
-    icon: [
-      {
-        url: '/favicon.ico',
-        media: '(prefers-color-scheme: light)',
-      },
-      
-    ],
-    apple: '/apple-icon.png',
-  },
+  icon: [
+    { url: '/favicon-32x32.png', sizes: '32x32' },
+    { url: '/favicon-192x192.png', sizes: '192x192' },
+  ],
+  apple: '/apple-icon-180x180.png',
+},
 }
 
 export default function RootLayout({
