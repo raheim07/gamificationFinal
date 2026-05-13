@@ -271,18 +271,36 @@ export function AdminDashboard() {
   }
 
   // ── Group averages ─────────────────────────────────────────────────────────
-  const groupAverages = (group: "control" | "intervention"): GroupAverages => {
-    const members = participants.filter((p) => p.group === group)
-    if (members.length === 0)
-      return { avgSteps: 0, avgPoints: 0, avgStreak: 0, avgEngagement: 0 }
-    const n = members.length
-    return {
-      avgSteps: Math.round(members.reduce((s, p) => s + p.weekly_steps, 0) / n),
-      avgPoints: Math.round(members.reduce((s, p) => s + p.total_points, 0) / n),
-      avgStreak: Math.round(members.reduce((s, p) => s + p.current_streak, 0) / n),
-      avgEngagement: Math.round(members.reduce((s, p) => s + p.engagement, 0) / n),
-    }
+  const DAYS_RECORDED = 16
+const DAYS_IN_WEEK = 7
+
+const groupAverages = (group: "control" | "intervention"): GroupAverages => {
+  const members = participants.filter((p) => p.group === group)
+
+  if (members.length === 0) {
+    return { avgSteps: 0, avgPoints: 0, avgStreak: 0, avgEngagement: 0 }
   }
+
+  const n = members.length
+
+  return {
+    avgSteps: Math.round(
+      members.reduce((s, p) => s + ((p.weekly_steps / DAYS_RECORDED) * DAYS_IN_WEEK), 0) / n
+    ),
+
+    avgPoints: Math.round(
+      members.reduce((s, p) => s + p.total_points, 0) / n
+    ),
+
+    avgStreak: Math.round(
+      members.reduce((s, p) => s + p.current_streak, 0) / n
+    ),
+
+    avgEngagement: Math.round(
+      members.reduce((s, p) => s + p.engagement, 0) / n
+    ),
+  }
+}
 
   const controlAvg = groupAverages("control")
   const interventionAvg = groupAverages("intervention")
