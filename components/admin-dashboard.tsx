@@ -112,6 +112,7 @@ interface ParticipantRow {
   badges_count: number
   adherence: number
   engagement: number
+  support_messages_count: number
 }
 
 interface GroupAverages {
@@ -136,6 +137,14 @@ export function AdminDashboard() {
   const loadData = useCallback(async () => {
     setLoading(true)
     setLoadError("")
+    const { data: messages } = await supabase
+    .from("messages")
+    .select("participant_id")
+    const supportMessageCounts = (messages ?? []).reduce((acc, msg) => {
+      acc[msg.participant_id] = (acc[msg.participant_id] ?? 0) + 1
+      return acc
+    }, {} as Record<string, number>)
+
     try {
       const [participantsRes, supportRes] = await Promise.all([
         supabase
@@ -181,6 +190,7 @@ export function AdminDashboard() {
             badges_count: deriveBadgeCount(stats, weeklyTotal),
             adherence: stats.adherence ?? 0,
             engagement: computeEngagement(stats.total_days_logged ?? 0),
+            support_messages_count: supportMessageCounts[p.id] ?? 0,
           } satisfies ParticipantRow
         })
       )
@@ -228,13 +238,27 @@ export function AdminDashboard() {
   // ── Export CSV ─────────────────────────────────────────────────────────────
   const handleExportCSV = () => {
     const headers = [
-      "Alias", "Group", "Weekly Steps", "Points",
-      "Streak", "Badges", "Adherence %", "Engagement %",
+      "Alias",
+      "Group",
+      "Weekly Steps",
+      "Points",
+      "Streak",
+      "Badges",
+      "Support Messages",
+      "Adherence %",
+      "Engagement %",
     ]
+
     const rows = participants.map((p) => [
-      p.alias, p.group ?? "unassigned", p.weekly_steps,
-      p.total_points, p.current_streak, p.badges_count,
-      p.adherence, p.engagement,
+      p.alias,
+      p.group ?? "unassigned",
+      p.weekly_steps,
+      p.total_points,
+      p.current_streak,
+      p.badges_count,
+      p.support_messages_count ?? 0,
+      p.adherence,
+      p.engagement,
     ])
     const csv = [headers, ...rows].map((r) => r.join(",")).join("\n")
     const blob = new Blob([csv], { type: "text/csv" })
